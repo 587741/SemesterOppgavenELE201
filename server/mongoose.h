@@ -103,8 +103,9 @@ extern "C" {
 #include <sys/types.h>
 #include <time.h>
 
+#ifndef MG_PATH_MAX
 #define MG_PATH_MAX 100
-#define MG_ENABLE_DIRLIST 0
+#endif
 
 #endif
 
@@ -127,8 +128,9 @@ extern "C" {
 #include <time.h>
 #include <unistd.h>
 
+#ifndef MG_PATH_MAX
 #define MG_PATH_MAX 100
-#define MG_ENABLE_DIRLIST 0
+#endif
 
 #endif
 
@@ -156,10 +158,6 @@ extern "C" {
 
 #ifndef MG_PATH_MAX
 #define MG_PATH_MAX 100
-#endif
-
-#ifndef MG_ENABLE_DIRLIST
-#define MG_ENABLE_DIRLIST 0
 #endif
 
 
@@ -327,10 +325,6 @@ extern "C" {
 #define MG_ENABLE_POSIX_FS 1
 #endif
 
-#ifndef MG_ENABLE_DIRLIST
-#define MG_ENABLE_DIRLIST 1
-#endif
-
 #ifndef MG_OTA_ESP32_WDT_TIMEOUT_MS
 #define MG_OTA_ESP32_WDT_TIMEOUT_MS 10000U
 #endif
@@ -438,16 +432,12 @@ static inline uint32_t mg_ota_esp32_state_set(uint32_t state) {
 #define MG_PATH_MAX 100
 #endif
 
-#ifndef MG_ENABLE_DIRLIST
-#define MG_ENABLE_DIRLIST 0
-#endif
-
 #ifndef MG_ENABLE_TCPIP
 #define MG_ENABLE_TCPIP 1  // Enable built-in TCP/IP stack
 #endif
 
 #if MG_ENABLE_TCPIP && !defined(MG_ENABLE_DRIVER_IMXRT10) && \
-    !defined(MG_ENABLE_DRIVER_IMXRT11)
+    !defined(MG_ENABLE_DRIVER_IMXRT11) && !defined(MG_ENABLE_DRIVER_NETC)
 #if defined(CPU_MIMXRT1021DAG5A) || defined(CPU_MIMXRT1024DAG5A) ||         \
     defined(CPU_MIMXRT1042XJM5B) || defined(CPU_MIMXRT1052DVL6B) ||         \
     defined(CPU_MIMXRT1062DVL6B) || defined(CPU_MIMXRT1064DVL6B) ||         \
@@ -462,6 +452,8 @@ static inline uint32_t mg_ota_esp32_state_set(uint32_t state) {
     defined(_MIMXRT1176_cm7_H_) || defined(_MIMXRT1176_cm4_H_) ||             \
     defined(_MIMXRT1176_H_)
 #define MG_ENABLE_DRIVER_IMXRT11 1
+#elif defined(CPU_MIMXRT1186CVJ8C_cm33) || defined(MIMXRT1186_cm33_H_)
+#define MG_ENABLE_DRIVER_NETC 1
 #else
 #error Select an Ethernet driver in mongoose_config.h
 #endif
@@ -493,13 +485,31 @@ static inline uint32_t mg_ota_esp32_state_set(uint32_t state) {
      defined(_MIMXRT1176_cm7_H_) || defined(_MIMXRT1176_cm4_H_) ||           \
      defined(_MIMXRT1176_H_))
 #define MG_OTA MG_OTA_RT1170
+#elif !defined(MG_OTA) && \
+    (defined(CPU_MIMXRT1186CVJ8C_cm33) || defined(MIMXRT1186_cm33_H_))
+#define MG_OTA MG_OTA_RT1180
 #endif
 
 #ifndef MG_IRAM
+#if defined(CPU_MIMXRT1186CVJ8C_cm33) || defined(MIMXRT1186_cm33_H_)
+#define MG_IRAM \
+  __attribute__((noinline, section(".ramfunc.$SRAM_ITC_cm33")))
+#else
 #define MG_IRAM __attribute__((noinline, section(".data_RAM2")))
+#endif
+#endif
+
+#ifndef MG_ETH_RAM
+#if defined(CPU_MIMXRT1186CVJ8C_cm33) || defined(MIMXRT1186_cm33_H_)
+#define MG_ETH_RAM __attribute__((section(".bss.$ETH_RAM")))
+#endif
 #endif
 
 #ifndef MG_SET_MAC_ADDRESS
+#if defined(MG_ENABLE_DRIVER_NETC) && MG_ENABLE_DRIVER_NETC
+// No OCOTP_FUSES present on RT1186 to generate the UUID
+#define MG_SET_MAC_ADDRESS(mac) (void) (mac)
+#else
 #if defined(MG_ENABLE_DRIVER_IMXRT11) && MG_ENABLE_DRIVER_IMXRT11
 #define MG_OCOTP_FUSES ((volatile uint32_t *) 0x40cac900)
 #else
@@ -515,10 +525,69 @@ static inline uint32_t mg_ota_esp32_state_set(uint32_t state) {
     mac[5] = (MG_OCOTP_FUSES[4] >> 0) & 255;                                \
   } while (0)
 #endif
+#endif
 
 #ifndef MG_IMXRT_WDOG1_TIMEOUT_MS
-#define MG_IMXRT_WDOG1_TIMEOUT_MS 10000
+#define MG_IMXRT_WDOG1_TIMEOUT_MS 10000U
 #endif
+
+#if defined(CPU_MIMXRT1186CVJ8C_cm33) || defined(MIMXRT1186_cm33_H_)
+
+#define MG_IMXRT_RTWDOG1_UNLOCK()                                \
+  do {                                                           \
+    if ((RTWDOG1->CS & RTWDOG_CS_CMD32EN_MASK) != 0U) {          \
+      RTWDOG1->CNT = RTWDOG_UPDATE_KEY;                          \
+    } else {                                                     \
+      RTWDOG1->CNT = RTWDOG_UPDATE_KEY & 0xffffU;                \
+      RTWDOG1->CNT = RTWDOG_UPDATE_KEY >> 16;                    \
+    }                                                            \
+    while ((RTWDOG1->CS & RTWDOG_CS_ULK_MASK) == 0U) (void) 0;  \
+  } while (0)
+
+#define MG_IMXRT_RTWDOG1_FEED()                                  \
+  do {                                                           \
+    uint32_t primask_ = __get_PRIMASK();                         \
+    __disable_irq();                                             \
+    if ((RTWDOG1->CS & RTWDOG_CS_CMD32EN_MASK) != 0U) {          \
+      RTWDOG1->CNT = RTWDOG_REFRESH_KEY;                         \
+    } else {                                                     \
+      RTWDOG1->CNT = RTWDOG_REFRESH_KEY & 0xffffU;               \
+      RTWDOG1->CNT = RTWDOG_REFRESH_KEY >> 16;                   \
+    }                                                            \
+    if (primask_ == 0U) __enable_irq();                          \
+  } while (0)
+
+#ifndef MG_OTA_ROLLBACK_TIMER_START
+#define MG_OTA_ROLLBACK_TIMER_START()                                      \
+  do {                                                                     \
+    uint32_t primask_ = __get_PRIMASK();                                   \
+    SRC_GENERAL_REG->SRMASK &= ~SRC_GENERAL_SRMASK_WDOG1_MASK_MASK;        \
+    __disable_irq();                                                       \
+    MG_IMXRT_RTWDOG1_UNLOCK();                                             \
+    RTWDOG1->WIN = 0U;                                                     \
+    RTWDOG1->TOVAL = (MG_IMXRT_WDOG1_TIMEOUT_MS + 7U) / 8U;                \
+    RTWDOG1->CS = RTWDOG_CS_EN_MASK | RTWDOG_CS_UPDATE_MASK |              \
+                  RTWDOG_CS_CLK(1U) | RTWDOG_CS_PRES_MASK |                \
+                  RTWDOG_CS_CMD32EN_MASK;                                  \
+    while ((RTWDOG1->CS & RTWDOG_CS_RCS_MASK) == 0U) (void) 0;             \
+    if (primask_ == 0U) __enable_irq();                                    \
+  } while (0)
+#endif
+
+#ifndef MG_OTA_ROLLBACK_TIMER_FEED
+#define MG_OTA_ROLLBACK_TIMER_FEED() MG_IMXRT_RTWDOG1_FEED()
+#endif
+
+// GPR5 survives RTWDOG global resets and is not reserved by the boot ROM.
+#ifndef MG_OTA_STATE_GET
+#define MG_OTA_STATE_GET() SRC_GENERAL_REG->GPR[5]
+#endif
+
+#ifndef MG_OTA_STATE_SET
+#define MG_OTA_STATE_SET(v) (SRC_GENERAL_REG->GPR[5] = (uint32_t) (v))
+#endif
+
+#else
 
 #define MG_IMXRT_WDOG1_FEED() \
   do {                        \
@@ -558,6 +627,8 @@ static inline uint32_t mg_ota_esp32_state_set(uint32_t state) {
     }                                \
     SNVS->LPGPR[0] = (uint32_t) (v); \
   } while (0)
+#endif
+
 #endif
 
 #endif
@@ -809,10 +880,6 @@ static inline int mg_mkdir(const char *path, mode_t mode) {
 #include <time.h>
 #include <unistd.h>
 
-#ifndef MG_ENABLE_DIRLIST
-#define MG_ENABLE_DIRLIST 1
-#endif
-
 #ifndef MG_PATH_MAX
 #define MG_PATH_MAX FILENAME_MAX
 #endif
@@ -992,10 +1059,6 @@ typedef int socklen_t;
 
 #ifndef S_ISDIR
 #define S_ISDIR(x) (((x) &_S_IFMT) == _S_IFDIR)
-#endif
-
-#ifndef MG_ENABLE_DIRLIST
-#define MG_ENABLE_DIRLIST 1
 #endif
 
 #ifndef SIGPIPE
@@ -1282,10 +1345,6 @@ struct timeval {
 #define MG_ENABLE_WINSOCK 1
 #endif
 
-#ifndef MG_ENABLE_DIRLIST
-#define MG_ENABLE_DIRLIST 0
-#endif
-
 #ifndef MG_ENABLE_CUSTOM_RANDOM
 #define MG_ENABLE_CUSTOM_RANDOM 0
 #endif
@@ -1335,7 +1394,7 @@ struct timeval {
 #endif
 
 #ifndef MG_ENABLE_POSIX_FS
-#define MG_ENABLE_POSIX_FS 0
+#define MG_ENABLE_POSIX_FS MG_ENABLE_LFS
 #endif
 
 #ifndef MG_INVALID_SOCKET
@@ -1375,6 +1434,14 @@ struct timeval {
 #define MG_ENABLE_TCPIP_DRIVER_INIT 1  // enabled built-in driver for
 #endif                                 // Mongoose built-in network stack
 
+#ifndef MG_ENABLE_TCPIP_TCPRTX
+#define MG_ENABLE_TCPIP_TCPRTX 0  // TCP retransmission queue
+#endif
+
+#ifndef MG_TCPIP_DHCPNAME_SIZE
+#define MG_TCPIP_DHCPNAME_SIZE 18  // struct mg_tcpip_if :: dhcp_name size
+#endif
+
 #ifndef MG_TCPIP_IP                      // e.g. MG_IPV4(192, 168, 0, 223)
 #define MG_TCPIP_IP MG_IPV4(0, 0, 0, 0)  // Default is 0.0.0.0 (DHCP)
 #endif
@@ -1411,10 +1478,6 @@ struct timeval {
 #define MG_SET_MAC_ADDRESS(mac)
 #endif
 
-#ifndef MG_TCPIP_DHCPNAME_SIZE
-#define MG_TCPIP_DHCPNAME_SIZE 18  // struct mg_tcpip_if :: dhcp_name size
-#endif
-
 #ifndef MG_SET_WIFI_CONFIG
 #define MG_SET_WIFI_CONFIG(ifp, driver_data)
 #endif
@@ -1425,6 +1488,10 @@ struct timeval {
 
 #ifndef MG_ENABLE_CHACHA20
 #define MG_ENABLE_CHACHA20 1  // When set to 0, GCM is used. For MG_TLS_BUILTIN
+#endif
+
+#ifndef MG_ENABLE_HEALTH
+#define MG_ENABLE_HEALTH 0
 #endif
 
 
@@ -1671,8 +1738,8 @@ typedef size_t (*mg_pm_t)(mg_pfn_t fn, void *arg, va_list *);
 //   - mg_print_base64 - prints a buffer as a base64-encoded string
 //   - mg_print_esc - prints a JSON-escaped string
 //   - mg_print_hex - prints a buffer as a hex string
-//   - mg_print_ip - prints an IP address in a struct mg_str
-//   - mg_print_ip_port - prints IP address and port in a struct mg_str
+//   - mg_print_ip - prints an IP address in a struct mg_addr
+//   - mg_print_ip_port - prints IP address and port in a struct mg_addr
 //   - mg_print_ip4 - prints an IPv4 address
 //   - mg_print_ip6 - prints an IPv6 address
 //   - mg_print_mac - prints a MAC address
@@ -1730,15 +1797,15 @@ char *mg_mprintf(const char *fmt, ...);
 size_t mg_queue_printf(struct mg_queue *, const char *fmt, ...);
 
 // Built-in %M/%m printer functions. Each reads its argument(s) from ap.
-size_t mg_print_base64(mg_pfn_t, void *arg, va_list *ap);   // expects: const void *buf, size_t len
+size_t mg_print_base64(mg_pfn_t, void *arg, va_list *ap);   // expects: int len, uint8_t *buf
 size_t mg_print_esc(mg_pfn_t, void *arg, va_list *ap);      // expects: int len, const char *str -- use MG_ESC()
-size_t mg_print_hex(mg_pfn_t, void *arg, va_list *ap);      // expects: const void *buf, size_t len
+size_t mg_print_hex(mg_pfn_t, void *arg, va_list *ap);      // expects: int len, uint8_t *buf
 size_t mg_print_ip(mg_pfn_t, void *arg, va_list *ap);       // expects: const struct mg_addr *
 size_t mg_print_ip_port(mg_pfn_t, void *arg, va_list *ap);  // expects: const struct mg_addr *
 size_t mg_print_ip4(mg_pfn_t, void *arg, va_list *ap);      // expects: uint32_t *ipv4
 size_t mg_print_ip6(mg_pfn_t, void *arg, va_list *ap);      // expects: uint8_t[16] ipv6
 size_t mg_print_mac(mg_pfn_t, void *arg, va_list *ap);      // expects: uint8_t[6] mac
-size_t mg_print_ieee64(mg_pfn_t, void *arg, va_list *ap);   // expects: uint64_t
+size_t mg_print_ieee64(mg_pfn_t, void *arg, va_list *ap);   // expects: uint8_t[8] ieee64
 size_t mg_print_l2addr(mg_pfn_t, void *arg, va_list *ap);   // expects: uint8_t l2, uint8_t[n] n-byte l2-dependent address
 size_t mg_print_html_esc(mg_pfn_t, void *arg, va_list *ap); // expects: int len, const char *str -- use MG_ESC()
 
@@ -1844,6 +1911,7 @@ void mg_timer_poll(struct mg_timer **head, uint64_t new_ms);
 
 
 
+
 // Flags returned by mg_fs.st() and passed to mg_fs.open().
 enum { MG_FS_READ = 1, MG_FS_WRITE = 2, MG_FS_DIR = 4, MG_FS_EXCL = 8 };
 
@@ -1881,6 +1949,7 @@ void mg_fs_close(struct mg_fd *fd);
 
 // Sequential directory iterator. Call repeatedly with the same buf/len;
 // each call fills buf with the next entry name. Returns false when done.
+// Note: make sure buf[0] == 0 before the first call
 bool mg_fs_ls(struct mg_fs *fs, const char *path, char *buf, size_t len);
 
 // Reads the entire file into a heap-allocated buffer. The returned mg_str is
@@ -1918,6 +1987,26 @@ struct mg_str mg_unpacked(const char *path);
 // Array of packed files generated by the "pack" utility into packed_fs.c.
 // Activate by assigning: mg_mem_files = mg_packed_files;
 extern const struct mg_mem_file mg_packed_files[];
+
+
+#if MG_ENABLE_LFS
+#include <fcntl.h>
+#include <lfs.h>
+
+#ifndef DT_DIR
+#define DT_DIR 4
+#endif
+#ifndef DT_REG
+#define DT_REG 8
+#endif
+
+struct dirent {
+  char d_name[LFS_NAME_MAX + 1];
+  unsigned char d_type;
+};
+
+typedef struct mg_lfs_fd DIR;
+#endif
 
 
 
@@ -2358,6 +2447,7 @@ struct mg_mgr {
   struct mg_tcpip_if *ifp;      // Builtin TCP/IP stack: network interface pointer
   size_t extraconnsize;         // Builtin TCP/IP stack: extra bytes allocated per connection
   union mg_pipe pipe;           // Socketpair write-end / queue, used by mg_wakeup()
+  struct mg_rpc *rpcs;          // Linked list of registered RPC handlers
 #if MG_ENABLE_FREERTOS_TCP
   SocketSet_t ss;               // FreeRTOS-TCP socket set
 #endif
@@ -2402,7 +2492,6 @@ struct mg_connection {
   unsigned is_closing : 1;        // Close and free immediately on next poll
   unsigned is_full : 1;           // Pause incoming reads until cleared
   unsigned is_tls_throttled : 1;  // TLS write was throttled; retry pending
-  unsigned is_resp : 1;           // HTTP: response is still being generated
   unsigned is_readable : 1;       // Socket is ready to read (epoll/select)
   unsigned is_writable : 1;       // Socket is ready to write (epoll/select)
 };
@@ -2579,6 +2668,9 @@ struct mg_http_serve_opts {
   const char *mime_types;     // Additional MIME types: "ext1=type1,ext2=type2". NULL for defaults only
   const char *page404;        // Path to a custom 404 page, e.g. "/404.html". NULL for built-in
   struct mg_fs *fs;           // Filesystem to use. NULL defaults to POSIX
+  bool enable_delete;         // Allow to DELETE files
+  bool enable_upload;         // Allow to POST/PUT files
+  bool enable_dir_listing;    // Enable directory listing
 };
 
 // A single part of a multipart/form-data body, filled by mg_http_next_multipart().
@@ -2652,14 +2744,26 @@ struct mg_connection *mg_http_connect(struct mg_mgr *, const char *url,
 //   mg_http_listen(), mg_http_serve_file(), mg_http_reply(), mg_match()
 // Notes:
 //   Call from an MG_EV_HTTP_MSG handler. The uri in hm is mapped under
-//   opts->root_dir. Directory listing depends on MG_ENABLE_DIRLIST; SSI uses
-//   opts->ssi_pattern when configured.
+//   opts->root_dir. opts->enable_dir_listing enables directory listing; SSI
+//   uses opts->ssi_pattern when configured. opts->enable_delete enables
+//   DELETE; opts->enable_upload enables POST/PUT, writing the whole body to
+//   a file - see mg_http_serve_upload() to also stream big uploads without
+//   buffering.
 void mg_http_serve_dir(struct mg_connection *, struct mg_http_message *hm,
                        const struct mg_http_serve_opts *);
 
 // Serves a single file at path. Call from an MG_EV_HTTP_MSG handler.
 void mg_http_serve_file(struct mg_connection *, struct mg_http_message *hm,
                         const char *path, const struct mg_http_serve_opts *);
+
+// Streams a big POST/PUT upload straight to a file, instead of buffering the
+// whole body. Optional companion to mg_http_serve_dir(): call this from
+// MG_EV_HTTP_HDRS with the same opts, and keep calling mg_http_serve_dir()
+// from MG_EV_HTTP_MSG as usual - it still handles uploads this function skips.
+// Does nothing unless opts->enable_upload is set, the method is POST or PUT,
+// and Content-Length is known and big enough.
+void mg_http_serve_upload(struct mg_connection *, struct mg_http_message *hm,
+                          const struct mg_http_serve_opts *);
 
 // Sends a complete HTTP response with Content-Length.
 //
@@ -2707,20 +2811,6 @@ void mg_http_creds(struct mg_http_message *, char *, size_t, char *, size_t);
 long mg_http_upload(struct mg_connection *c, struct mg_http_message *hm,
                     struct mg_fs *fs, const char *dir, size_t max_size);
 
-// Streams the raw request body into dir/name via fs. Non-blocking: installs an
-// internal handler and returns immediately. fn is called with NULL on success
-// or an error string on failure.
-void mg_http_start_upload(struct mg_connection *c, struct mg_http_message *hm,
-                          struct mg_str name, struct mg_str dir,
-                          struct mg_fs *fs,
-                          void (*fn)(struct mg_connection *, const char *));
-
-// Starts an OTA firmware update from an HTTP POST upload.
-// Calls mg_ota_begin/write/end internally; fn is called with NULL on success,
-// or an error string on failure.
-void mg_http_start_ota(struct mg_connection *c, struct mg_http_message *hm,
-                       void (*fn)(struct mg_connection *, const char *));
-
 // Sends a 401 Unauthorized response with a Basic Auth WWW-Authenticate challenge.
 void mg_http_bauth(struct mg_connection *, const char *user, const char *pass);
 
@@ -2739,7 +2829,7 @@ struct mg_str mg_http_get_header_var(struct mg_str s, struct mg_str v);
 // Full examples:
 //   tutorials/http/file-upload-html-form, tutorials/http/http-server
 // Related APIs:
-//   mg_http_listen(), mg_http_start_upload()
+//   mg_http_listen(), mg_http_stream_body()
 // Notes:
 //   Call from an MG_EV_HTTP_MSG handler after the full request body is
 //   received. part.name, part.filename, and part.body are zero-copy slices into
@@ -2748,6 +2838,35 @@ size_t mg_http_next_multipart(struct mg_str, size_t, struct mg_http_part *);
 
 // Returns the HTTP status code from a parsed response message (e.g. 200, 404).
 int mg_http_status(const struct mg_http_message *hm);
+
+// Streams a POST/PUT body to a callback as it arrives, without buffering it.
+// Call it from an MG_EV_HTTP_HDRS handler, after matching the request, e.g.
+// with mg_match(). Returns true if it took over the connection, false if the
+// request is not POST/PUT, is chunked, or has no Content-Length.
+//
+// Callback upload_fn(hm, data, user_data) is called:
+//   - at start: hm is set. Open the file, set *user_data.
+//   - per chunk: data is set, 512 byte aligned except the last. Not called
+//     again after a failure.
+//   - at end: both NULL. Always called once, also when the connection drops
+//     early, so release resources here. A truncated body looks like a complete
+//     one: validate before committing.
+// Return true on success, false on error.
+// Example:
+//   if (ev == MG_EV_HTTP_HDRS && mg_match(hm->uri, mg_str("/fs/*"), NULL) {
+//     mg_http_stream_body(c, hm, upload, NULL));
+//   }
+// Full example:
+//   tutorials/http/file-upload-single-post
+// Related APIs:
+//   mg_http_listen(), mg_http_next_multipart()
+// Notes:
+//   After it returns true, this function hijacks the connection. Existing event
+//   handler not called, hm is invalid, c->data and c->fn_data are modified
+bool mg_http_stream_body(struct mg_connection *c, struct mg_http_message *hm,
+                         bool (*upload_fn)(struct mg_http_message *,
+                                           struct mg_str *, void **user_data),
+                         void *user_data);
 
 
 void mg_http_serve_ssi(struct mg_connection *c, const char *root,
@@ -2835,7 +2954,7 @@ void mg_tls_free(struct mg_connection *);
 long mg_tls_send(struct mg_connection *, const void *buf, size_t len);
 long mg_tls_recv(struct mg_connection *, void *buf, size_t len);
 size_t mg_tls_pending(struct mg_connection *);
-void mg_tls_flush(struct mg_connection *);
+long mg_tls_flush(struct mg_connection *);
 void mg_tls_handshake(struct mg_connection *);
 void mg_tls_ctx_init(struct mg_mgr *);
 void mg_tls_ctx_free(struct mg_mgr *);
@@ -3894,7 +4013,6 @@ uint64_t mg_now(void);
 //     MG_INFO(("every second"));
 //   }
 // Full examples:
-//   tutorials/http/http-server/arduino/teensy41-http,
 //   tutorials/mqtt/mqtt-client
 // Related APIs:
 //   mg_millis(), mg_now()
@@ -4533,9 +4651,7 @@ struct mg_field_set {
                // fn sets *index = -1 to signal end of iteration.
                // Size query: framework sets *index = -1 before fn(READ); fn
                // sets *index = total size
-  bool (*get_dir)(const struct mg_dash_user *u, char *buf,
-                  size_t len);  // Non-NULL: file array
-  struct mg_field_set *next;    // Next set in the list
+  struct mg_field_set *next;  // Next set in the list
 };
 
 // Custom URI handler, registered with MG_DASH_REGISTER_CUSTOM_HANDLER()
@@ -4556,6 +4672,9 @@ struct mg_dash {
   int session_auto_expiration_seconds;  // Session lifetime, 0: 1 hour default
   struct mg_dash_user *guest;           // Used when authenticate == NULL
   struct mg_fs *upload_fs;  // FS for uploads/listing, default &mg_fs_posix
+  // Resolves the built-in file manager's root dir for user u, e.g. per-user
+  // upload directories. NULL: file manager disabled
+  bool (*files_dir)(const struct mg_dash_user *u, char *buf, size_t len);
 };
 
 #define MG_DASH_ADD_FIELD_SET(dash_, set_) \
@@ -4581,43 +4700,6 @@ void mg_dash_ev_handler(struct mg_connection *c, int ev, void *ev_data);
 // array size if *set->index < 0, or a single element update otherwise
 void mg_dash_send_change(struct mg_mgr *mgr, struct mg_field_set *);
 
-// Default reader for file-backed array sets (set->get_dir != NULL)
-// Usage example - this is a complete implemenation of the file manager:
-// ```c
-// static struct file {
-//   int index;
-//   char name[64];
-//   size_t size;
-//   uint64_t checksum;
-// } s_file;
-// static struct mg_field_set set_files;
-//
-// static bool get_dir(const struct mg_dash_user *u, char *buf, size_t len) {
-//   (void) u;
-//   mkdir("/tmp/dashboard", 0755);
-//   mg_snprintf(buf, len, "%s", "/tmp/dashboard");
-//   return true;
-// }
-//
-// static struct mg_field fields_files[] = {
-//     {"name", MG_VAL_STR, s_file.name, sizeof(s_file.name)},
-//     {"size", MG_VAL_UINT64, &s_file.size, 0},
-//     {"checksum", MG_VAL_UINT64, &s_file.checksum, sizeof(s_file.checksum)},
-//     {NULL, MG_VAL_INT, NULL, 0},
-// };
-//
-// static bool files_fn(enum mg_dash_op op, struct mg_dash_user *u) {
-//   if (op == MG_DASH_WRITE) return s_uploads_enabled && u->level >= 7;
-//   if (op != MG_DASH_READ) return false;
-//   if (!mg_dash_dir_read(&set_files, u)) return false;
-//   s_file.checksum = 0;  // Mock to show how to set custom fields
-//   return true;
-// }
-//
-// static struct mg_field_set set_files = {"files", fields_files, files_fn, &s_file.index, get_dir, NULL};
-// ```
-bool mg_dash_dir_read(struct mg_field_set *set, struct mg_dash_user *u);
-
 // Helper forward declarations for Mongoose CMSIS pack modules
 extern struct mg_mgr g_mgr;
 extern void mg_dash_init(struct mg_mgr *);
@@ -4629,7 +4711,7 @@ extern void mg_mqtt_poll(struct mg_mgr *);
 // This is a low-level OTA API, not intended to be called directly by users.
 // Users are provided with a higher-level API:
 // - defining MG_OTA_URL enables HTTP or HTTPS pull-based updates
-// - mg_http_start_ota() enables push-based updates
+// - mg_http_stream_body() enables push-based updates
 //
 // However, it is possible to use the mg_ota_* API directly. Below is the
 // example code of a function that is called repeatedly. It expects the
@@ -4667,6 +4749,7 @@ extern void mg_mqtt_poll(struct mg_mgr *);
 #define MG_OTA_RT1060 302           // IMXRT1060
 #define MG_OTA_RT1064 303           // IMXRT1064
 #define MG_OTA_RT1170 304           // IMXRT1170
+#define MG_OTA_RT1180 305           // IMXRT1180
 #define MG_OTA_MCXN 310             // MCXN947
 #define MG_OTA_RW612 320            // FRDM-RW612
 #define MG_OTA_FLASH 900            // OTA via internal flash
@@ -4779,7 +4862,7 @@ enum {
 // needs to be defined. Fetches metadata_url, which must
 // return a JSON object like:
 // { "version": "1.2.3", "url": "FIRMWARE_URL", "size": 324645 }
-// If the server version differs from MG_OTA_FIRMWARE_VERSION, downloads
+// If the server version differs from MG_FIRMWARE_VERSION, downloads
 // FIRMWARE_URL and performs the OTA update. fn is called on every outcome:
 // NULL on successful flash, "Same version" when already up to date, or an
 // error string on failure. Pass NULL to use the default handler which logs
@@ -4806,8 +4889,8 @@ void mg_ota_url_check(struct mg_mgr *mgr, const char *metadata_url,
 #endif
 
 // Firmware version for mg_ota_poll(). Settable in mongoose_config.h
-#ifndef MG_OTA_FIRMWARE_VERSION
-#define MG_OTA_FIRMWARE_VERSION "1.0.0"
+#ifndef MG_FIRMWARE_VERSION
+#define MG_FIRMWARE_VERSION "1.0.0"
 #endif
 
 // Maximum version string length
@@ -4833,6 +4916,119 @@ void mg_ota_device_id(char *buf, size_t len);
 // mg_mgr_poll() when MG_OTA_URL is set in mongoose_config.h. Do not call
 // directly.
 void mg_ota_poll(struct mg_mgr *);
+// Device health monitoring
+
+
+
+
+
+
+#ifndef MG_HEALTH_MAGIC
+#define MG_HEALTH_MAGIC {'M', 'G', 'H', '3'}  // '3' is the layout version
+#endif
+
+#if !defined(MG_HEALTH_RAM) && (defined(STM32H7_DEV_ID) || defined(STM32H5))
+#define MG_HEALTH_RAM __attribute__((section(".mg_health")))
+#endif
+
+#if !defined(MG_HEALTH_DATA_SIZE) && (defined(STM32H7_DEV_ID) || defined(STM32H5))
+#define MG_HEALTH_DATA_SIZE 250
+#endif
+
+#ifndef MG_HEALTH_DATA_SIZE
+#define MG_HEALTH_DATA_SIZE 10
+#endif
+
+// Places the record in RAM that survives a reset. Define in mongoose_config.h
+// to match the linker script, e.g. __attribute__((section(".mg_health")))
+#ifndef MG_HEALTH_RAM
+#define MG_HEALTH_RAM
+#endif
+
+// Why the device restarted. Hardware usually reports several flags at once,
+// so these are ordered by how much they tell you: the most specific cause a
+// device reports wins
+enum mg_health_reason {
+  MG_HEALTH_RESET_UNKNOWN = 0,  // Nothing reported, or no masks configured
+  MG_HEALTH_RESET_POWER,        // Power-on reset, RAM contents are lost
+  MG_HEALTH_RESET_BROWNOUT,     // Supply dipped below the brown-out level
+  MG_HEALTH_RESET_PIN,          // External reset pin, e.g. the reset button
+  MG_HEALTH_RESET_SOFTWARE,     // Firmware asked for it, e.g. NVIC_SystemReset
+  MG_HEALTH_RESET_LOWPOWER,     // Illegal or failed low-power transition
+  MG_HEALTH_RESET_WATCHDOG,     // Watchdog fired: the application stopped
+  MG_HEALTH_RESET_FAULT         // Fault handler ran, see regs[] and saved_stack
+};
+
+struct mg_health {
+  char magic[4];          // MG_HEALTH_MAGIC when the record holds valid data
+  uint32_t reset_reason;  // enum mg_health_reason that started this boot
+  uint32_t cpuid;         // ARM CPU ID
+  uint32_t data[MG_HEALTH_DATA_SIZE];
+};
+
+extern struct mg_health mg_health_record;  // Defined in health.c
+
+// Return true if the record holds valid data, i.e. it survived the reset and
+// was written by this firmware layout
+static inline bool mg_health_valid(void) {
+  static const char magic[] = MG_HEALTH_MAGIC;
+  return memcmp(mg_health_record.magic, magic,
+                sizeof(mg_health_record.magic)) == 0;
+}
+
+static inline int mg_health_reason(void) {
+  return mg_health_valid() ? (int) mg_health_record.reset_reason
+                           : MG_HEALTH_RESET_UNKNOWN;
+}
+
+static inline const char *mg_health_reason_str(int reason) {
+  switch (reason) {
+    case MG_HEALTH_RESET_POWER: return "power";
+    case MG_HEALTH_RESET_BROWNOUT: return "brownout";
+    case MG_HEALTH_RESET_PIN: return "pin";
+    case MG_HEALTH_RESET_SOFTWARE: return "software";
+    case MG_HEALTH_RESET_LOWPOWER: return "lowpower";
+    case MG_HEALTH_RESET_WATCHDOG: return "watchdog";
+    case MG_HEALTH_RESET_FAULT: return "fault";
+    default: return "unknown";
+  }
+}
+
+// Start a new boot: validate the record, count the boot, store the reset
+// reason. The current boot moves to prev_* slots first, so the previous
+// boot's uptime and reason stay readable. Called by MG_HEALTH_INIT()
+static inline void mg_health_init(void) {
+  char magic[] = MG_HEALTH_MAGIC;
+  // struct mg_health *h = mg_health_get();
+  if (!mg_health_valid()) {  // First boot, or RAM lost its contents
+    memset(&mg_health_record, 0, sizeof(mg_health_record));
+    memcpy(mg_health_record.magic, magic, sizeof(mg_health_record.magic));
+  }
+}
+
+#define MG_HEALTH_INIT() mg_health_init()
+extern size_t mg_print_crash_record(mg_pfn_t, void *, va_list *);
+// Cloud connector API to https://mdash.net - device management cloud
+
+
+
+
+
+#ifndef MG_MDASH_URL
+#define MG_MDASH_URL "wss://mdash.net/api/v2/rpc"
+#endif
+
+#ifndef MG_MDASH_KEY
+#define MG_MDASH_KEY ""
+#endif
+
+#ifndef MG_ENABLE_MDASH
+#define MG_ENABLE_MDASH 0
+#endif
+
+void mg_mdash_init(struct mg_mgr *);
+void mg_mdash_poll(struct mg_mgr *);
+void mg_mdash_free(struct mg_mgr *);
 
 
 
@@ -5018,6 +5214,7 @@ struct mg_tcpip_if {
   bool enable_req_sntp;                   // DHCP client requests an SNTP server address
   bool enable_fcs_check;                  // Verify and strip FCS from received frames
   bool enable_mac_check;                  // Drop frames not addressed to this MAC
+  bool enable_tcp_retransmit;             // Enable optional TCP retransmission queue
   bool update_mac_hash_table;             // Signal driver to refresh MAC multicast hash table
   bool is_ip_changed;                     // Set by stack when IP changes; triggers connection restart
   struct mg_tcpip_driver *driver;         // Hardware driver; must be set before mg_tcpip_init()
@@ -5111,6 +5308,7 @@ extern struct mg_tcpip_driver mg_tcpip_driver_cyw;
 extern struct mg_tcpip_driver mg_tcpip_driver_nxp_wifi;
 extern struct mg_tcpip_driver mg_tcpip_driver_st67w6;
 extern struct mg_tcpip_driver mg_tcpip_driver_atcmd;
+extern struct mg_tcpip_driver mg_tcpip_driver_netc;
 
 // SPI bus abstraction for SPI-attached network chips (e.g. W5500).
 // Populate and assign to the driver's driver_data field.
@@ -5450,6 +5648,55 @@ struct mg_tcpip_driver_imxrt_data {
     MG_SET_MAC_ADDRESS(mif_.mac);                                \
     mg_tcpip_init(mgr, &mif_);                                   \
     MG_INFO(("Driver: imxrt, MAC: %M", mg_print_mac, mif_.mac)); \
+  } while (0)
+
+#endif
+
+
+#if defined(MG_ENABLE_TCPIP) && MG_ENABLE_TCPIP && \
+    defined(MG_ENABLE_DRIVER_NETC) && MG_ENABLE_DRIVER_NETC
+
+struct mg_tcpip_driver_netc_data {
+  int mdc_cr;
+  uint8_t phy_addr;
+
+  // Selects the physical Ethernet link (ETH0 through ETH3)
+  // Its switch port is bridged to pseudo-port 4,
+  // which connects internally to ENETC1
+  // IMXRT1180 RM 53.4.1.1 NETC Block diagram
+  uint8_t link;
+};
+
+#ifndef MG_TCPIP_PHY_ADDR
+#define MG_TCPIP_PHY_ADDR 5
+#endif
+
+#ifndef MG_DRIVER_MDC_CR
+#define MG_DRIVER_MDC_CR 48
+#endif
+
+#ifndef MG_TCPIP_NETC_LINK
+#define MG_TCPIP_NETC_LINK 0
+#endif
+
+struct mg_tcpip_driver;
+extern struct mg_tcpip_driver mg_tcpip_driver_netc;
+
+#define MG_TCPIP_DRIVER_INIT(mgr)                              \
+  do {                                                         \
+    static struct mg_tcpip_driver_netc_data driver_data_;      \
+    static struct mg_tcpip_if mif_;                            \
+    driver_data_.mdc_cr = MG_DRIVER_MDC_CR;                    \
+    driver_data_.phy_addr = MG_TCPIP_PHY_ADDR;                 \
+    driver_data_.link = MG_TCPIP_NETC_LINK;                    \
+    mif_.ip = MG_TCPIP_IP;                                     \
+    mif_.mask = MG_TCPIP_MASK;                                 \
+    mif_.gw = MG_TCPIP_GW;                                     \
+    mif_.driver = &mg_tcpip_driver_netc;                       \
+    mif_.driver_data = &driver_data_;                          \
+    MG_SET_MAC_ADDRESS(mif_.mac);                              \
+    mg_tcpip_init(mgr, &mif_);                                 \
+    MG_INFO(("Driver: netc, MAC: %M", mg_print_mac, mif_.mac)); \
   } while (0)
 
 #endif
