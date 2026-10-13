@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>Chronometer Server</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f4f4f4;
+      text-align: center;
+      padding-top: 60px;
+    }
+
+    .card {
+      background-color: white;
+      width: 350px;
+      margin: auto;
+      padding: 30px;
+      border-radius: 10px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.15);
+    }
+
+    h1 {
+      margin-bottom: 30px;
+    }
+
+    .label {
+      font-weight: bold;
+      font-size: 18px;
+    }
+
+    .value {
+      font-size: 26px;
+      margin-bottom: 25px;
+    }
+
+    #connection {
+      margin-top: 20px;
+      font-size: 14px;
+      color: gray;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="card">
+
+    <h1>Chronometer Status</h1>
+
+    <div class="label">
+      State:
+    </div>
+
+    <div class="value" id="state">
+      Loading...
+    </div>
+
+
+    <div class="label">
+      Elapsed Time:
+    </div>
+
+    <div class="value">
+      <span id="elapsed">0</span> ms
+    </div>
+
+
+    <div id="connection">
+      Connecting to server...
+    </div>
+
+  </div>
+
+
+  <script>
+
+    async function updateChronometer() {
+
+      try {
+
+        // Ask the Mongoose server for the current values
+        const response =
+          await fetch("/api/chronometer");
+
+
+        // Check that the server responded correctly
+        if (!response.ok) {
+          throw new Error("HTTP error " + response.status);
+        }
+
+
+        // Convert JSON response into JavaScript data
+        const data =
+          await response.json();
+
+
+        // Update the webpage
+        document.getElementById("state").textContent =
+          data.state;
+
+        document.getElementById("elapsed").textContent =
+          data.elapsed_ms;
+
+
+        document.getElementById("connection").textContent =
+          "Connected to chronometer server";
+
+      }
+
+      catch (error) {
+
+        document.getElementById("connection").textContent =
+          "Could not connect to chronometer server";
+
+        console.error(error);
+
+      }
+    }
+
+
+    // Load immediately when the page opens
+    updateChronometer();
+
+
+    // Ask the server for new values every 1 second
+    setInterval(updateChronometer, 1000);
+
+  </script>
+
+</body>
+</html>
