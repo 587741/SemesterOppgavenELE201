@@ -25,6 +25,7 @@
 #include "lwip/netif.h"
 #include "lwip/ip4_addr.h"
 #include "lwip/tcp.h"
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -77,7 +78,7 @@ static void MX_GPIO_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_USART3_UART_Init(void);
 /* USER CODE BEGIN PFP */
-static void send_test_post(void);
+static void send_chronometer_post(void);
 static err_t http_connected(void *arg,struct tcp_pcb *tpcb, err_t err);
 static err_t http_receive(void *arg,struct tcp_pcb *tpcb,struct pbuf *p,err_t err);
 static void http_error(void *arg,err_t err);
@@ -86,7 +87,7 @@ static void http_error(void *arg,err_t err);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-volatile uint32_t elapsedTime = 0; // counter for elapsed time in milliseconds
+volatile uint32_t elapsedTime = 0; // // TIM2 elapsed count in microseconds
 volatile uint32_t lastButtonPressTime = 0; // Variable to hold the last button press time
 volatile uint32_t finalCount = 0;   // Saved TIM2 value at Stop press
 volatile uint8_t stopEvent = 0;     // Tells main loop a stop occurred
@@ -185,7 +186,7 @@ int main(void)
         httpUpdatePending = 0;
          lastHttpUpdate = HAL_GetTick();
 
-         send_test_post();
+         send_chronometer_post();
       }
 
        if (state == WAITING && newChronometer == 0 && stopEvent == 0)
@@ -622,10 +623,11 @@ static err_t http_connected(void *arg,struct tcp_pcb *tpcb,err_t err)
     return result;
 }
 
-static void send_test_post(void)
+static void send_chronometer_post(void)
 {
     ip_addr_t server_ip;
-    IP4_ADDR(&server_ip,192, 168, 10, 115);http_pcb = tcp_new();
+    IP4_ADDR(&server_ip,192, 168, 10, 115);
+    http_pcb = tcp_new();
 
     if (http_pcb == NULL)
     {
