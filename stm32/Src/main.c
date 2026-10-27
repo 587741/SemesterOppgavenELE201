@@ -19,7 +19,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "lwip.h"
-#include "string.h"
+
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "lwip/netif.h"
@@ -142,50 +142,39 @@ int main(void)
 
     // Process incoming/outgoing Ethernet packets
     MX_LWIP_Process();
+      if (!netif_is_link_up(&gnetif))
+    {
+      HAL_GPIO_WritePin(EXT_ETH_LED_GPIO_Port,EXT_ETH_LED_Pin,GPIO_PIN_RESET); // Reset the Ethernet LED to indicate link down
+    }
 
-     if (ipPrinted == 0 &&
-      netif_is_link_up(&gnetif) &&
-      !ip4_addr_isany_val(*netif_ip4_addr(&gnetif)))
-      {
+
+      if (ipPrinted == 0 && netif_is_link_up(&gnetif) && !ip4_addr_isany_val(*netif_ip4_addr(&gnetif)))
+    {
       const ip4_addr_t *ip = netif_ip4_addr(&gnetif);
 
-      int len = snprintf(
-          msg,
-          sizeof(msg),
-          "STM32 IP: %u.%u.%u.%u\r\n",
+      int len = snprintf(msg,sizeof(msg),"STM32 IP: %u.%u.%u.%u\r\n",
           ip4_addr1(ip),
           ip4_addr2(ip),
           ip4_addr3(ip),
           ip4_addr4(ip)
         );
 
-        HAL_UART_Transmit(
-          &huart3,
-          (uint8_t *)msg,
-          len,
-          HAL_MAX_DELAY
-        );
-
+        HAL_UART_Transmit(&huart3,(uint8_t *)msg,len,HAL_MAX_DELAY);
           ipPrinted = 1;
           httpUpdatePending = 1;
          }
 
         // Request a periodic update every 60 seconds
-        if (ipPrinted == 1 &&
-        (HAL_GetTick() - lastHttpUpdate >= 60000))
-          {
+        if (ipPrinted == 1 && (HAL_GetTick() - lastHttpUpdate >= 60000))
+      {
         httpUpdatePending = 1;
       }
 
-
       // Send update if one is pending and no HTTP connection is already active
-        if (ipPrinted == 1 &&
-        httpUpdatePending == 1 &&
-        http_pcb == NULL)
+        if (ipPrinted == 1 && httpUpdatePending == 1 && http_pcb == NULL)
       {
-        httpUpdatePending = 0;
+         httpUpdatePending = 0;
          lastHttpUpdate = HAL_GetTick();
-
          send_chronometer_post();
       }
 
@@ -196,7 +185,7 @@ int main(void)
           state = WAITING; // Reset the state to waiting
           int len = snprintf(msg, sizeof(msg), "Press button to start \r\n");
           HAL_UART_Transmit(&huart3, (uint8_t *)msg, len, HAL_MAX_DELAY);
-          HAL_GPIO_WritePin(EXT_GREEN_LED_GPIO_Port, EXT_GREEN_LED_Pin, GPIO_PIN_RESET); // Turn off the LED
+          HAL_GPIO_WritePin(EXT_WAITING_LED_GPIO_Port, EXT_WAITING_LED_Pin, GPIO_PIN_SET); // Turn on the WAITING LED
           newChronometer = 1; // Set the flag to indicate that we are waiting for button press
        
     }
@@ -205,8 +194,9 @@ int main(void)
           __HAL_TIM_SET_COUNTER(&htim2, 0); // Set the counter value to 0
           __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 10000);// Set the compare value to 10000
           HAL_TIM_OC_Start_IT(&htim2, TIM_CHANNEL_1);// Start the timer in output compare mode with interrupt
-          HAL_GPIO_WritePin(EXT_GREEN_LED_GPIO_Port, EXT_GREEN_LED_Pin, GPIO_PIN_SET); // Turn on the LED
-          
+          HAL_GPIO_WritePin(EXT_WAITING_LED_GPIO_Port, EXT_WAITING_LED_Pin, GPIO_PIN_RESET); // Turn off WAITING LED
+          HAL_GPIO_WritePin(EXT_RUNNING_LED_GPIO_Port, EXT_RUNNING_LED_Pin, GPIO_PIN_SET); // Turn on the RUNNING LED
+
           // Print the start/counting message once
           int len = snprintf(msg, sizeof(msg),"Counting... Press button to stop\r\n");
           HAL_UART_Transmit(&huart3, (uint8_t *)msg, len, HAL_MAX_DELAY);
@@ -220,6 +210,7 @@ int main(void)
               timer_flag = 0; // Reset the flag to indicate that we have handled the timer event
               int len = snprintf(msg, sizeof(msg),"Time in MS: %lu\r\n",elapsedTime / 1000); // Convert microseconds to milliseconds
               HAL_UART_Transmit(&huart3, (uint8_t *)msg, len, HAL_MAX_DELAY);
+              
           }
 
       if (stopEvent == 1)
@@ -227,11 +218,11 @@ int main(void)
             // Stop TIM2. We already saved the important counter value,
             // so it does not matter if CNT moved slightly before this executes.
           HAL_TIM_OC_Stop_IT(&htim2, TIM_CHANNEL_1);
-
+          HAL_GPIO_WritePin(EXT_RUNNING_LED_GPIO_Port, EXT_RUNNING_LED_Pin, GPIO_PIN_RESET); // Turn off the RUNNING LED  
           // Convert microseconds to milliseconds.
           uint32_t milliseconds = finalCount / 1000;
 
-            int len = snprintf(msg, sizeof(msg), "Total time: %lu ms\r\n", milliseconds);
+          int len = snprintf(msg, sizeof(msg), "Total time: %lu ms\r\n", milliseconds);
            HAL_UART_Transmit(&huart3,(uint8_t *)msg,len, HAL_MAX_DELAY);
            stopEvent = 0;
 
@@ -406,25 +397,45 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOG_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
-  __HAL_RCC_GPIOG_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(EXT_GREEN_LED_GPIO_Port, EXT_GREEN_LED_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(EXT_WAITING_LED_GPIO_Port, EXT_WAITING_LED_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : EXT_GREEN_LED_Pin */
-  GPIO_InitStruct.Pin = EXT_GREEN_LED_Pin;
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(EXT_ETH_LED_GPIO_Port, EXT_ETH_LED_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(EXT_RUNNING_LED_GPIO_Port, EXT_RUNNING_LED_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : EXT_WAITING_LED_Pin */
+  GPIO_InitStruct.Pin = EXT_WAITING_LED_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(EXT_GREEN_LED_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(EXT_WAITING_LED_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : USER_BTN_EXTI_Pin */
   GPIO_InitStruct.Pin = USER_BTN_EXTI_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(USER_BTN_EXTI_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : EXT_ETH_LED_Pin */
+  GPIO_InitStruct.Pin = EXT_ETH_LED_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(EXT_ETH_LED_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : EXT_RUNNING_LED_Pin */
+  GPIO_InitStruct.Pin = EXT_RUNNING_LED_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(EXT_RUNNING_LED_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI3_IRQn, 0, 0);
@@ -475,9 +486,8 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
 }
 static void http_error(void *arg, err_t err)
 {
+    HAL_GPIO_WritePin(EXT_ETH_LED_GPIO_Port, EXT_ETH_LED_Pin, GPIO_PIN_RESET); // Reset the Ethernet LED to indicate an error
     http_pcb = NULL;
-    int len = snprintf(msg, sizeof(msg), "HTTP TCP error: %d\r\n", err);
-    HAL_UART_Transmit( &huart3,(uint8_t *)msg,len,HAL_MAX_DELAY);
 }
 
 
@@ -494,33 +504,12 @@ static err_t http_receive(void *arg, struct tcp_pcb *tpcb, struct pbuf *p,err_t 
 
     if (err == ERR_OK)
     {
-        // Tell LwIP that we received these bytes
-        tcp_recved(tpcb, p->tot_len);
-
-        // Print a header
-        const char header[] = "\r\nServer response:\r\n";
-        HAL_UART_Transmit(&huart3,(uint8_t *)header, sizeof(header) - 1,HAL_MAX_DELAY);
-
-        // A TCP packet may consist of several chained pbufs.
-        struct pbuf *q = p;
-
-        while (q != NULL)
-        {
-            HAL_UART_Transmit(&huart3,(uint8_t *)q->payload,q->len,HAL_MAX_DELAY);
-            q = q->next;
-        }
-
-        const char ending[] = "\r\n";
-
-        HAL_UART_Transmit(
-            &huart3,
-            (uint8_t *)ending,
-            sizeof(ending) - 1,
-            HAL_MAX_DELAY
-        );
+      HAL_GPIO_WritePin(EXT_ETH_LED_GPIO_Port, EXT_ETH_LED_Pin, GPIO_PIN_SET); // Turn on LED after successful server response
+      // Tell LwIP that we received these bytes
+      tcp_recved(tpcb, p->tot_len); // Acknowledge that we have received the data
     }
 
-    pbuf_free(p);
+    pbuf_free(p); // Free the pbuf after processing
 
     return ERR_OK;
 }
@@ -532,29 +521,18 @@ static err_t http_connected(void *arg,struct tcp_pcb *tpcb,err_t err)
         return err;
     }
 
-    int len = snprintf(msg,sizeof(msg),"Connected to Mongoose server\r\n");
-
-    HAL_UART_Transmit(&huart3,(uint8_t *)msg,len,HAL_MAX_DELAY);
-
     // Receive the server response
-    tcp_recv(
-        tpcb,
-        http_receive
-    );
+    tcp_recv(tpcb,http_receive);
 
-    // -------------------------------------------------
     // Get actual chronometer values
-    // -------------------------------------------------
     const char *state_text;
     uint32_t current_ms;
 
     if (state == RUNNING)
     {
         state_text = "RUNNING";
-
         // TIM2 is counting microseconds
-        current_ms =
-            __HAL_TIM_GET_COUNTER(&htim2) / 1000;
+        current_ms = __HAL_TIM_GET_COUNTER(&htim2) / 1000;
     }
 
     else if (state == ENTERING)
@@ -566,23 +544,16 @@ static err_t http_connected(void *arg,struct tcp_pcb *tpcb,err_t err)
     else
     {
         state_text = "WAITING";
-
         // Show the last stopped time
         current_ms = finalCount / 1000;
     }
 
-    // -------------------------------------------------
     // Create JSON body
-    // -------------------------------------------------
-
     char body[100];
-
     snprintf(body,sizeof(body),"{\"state\":\"%s\",\"elapsed_ms\":%lu}",state_text,(unsigned long) current_ms);
 
-    // -------------------------------------------------
+  
     // Create HTTP request
-    // -------------------------------------------------
-
     char request[300];
 
     int request_length = snprintf(
@@ -601,23 +572,11 @@ static err_t http_connected(void *arg,struct tcp_pcb *tpcb,err_t err)
         body
     );
 
-
-    // -------------------------------------------------
     // Send HTTP request
-    // -------------------------------------------------
-
     err_t result = tcp_write(tpcb,request,request_length,TCP_WRITE_FLAG_COPY);
-
     if (result == ERR_OK)
     {
         result = tcp_output(tpcb);
-    }
-
-    if (result == ERR_OK)
-    {
-        len = snprintf(msg,sizeof(msg),"HTTP POST sent: %s\r\n",body);
-
-        HAL_UART_Transmit(&huart3,(uint8_t *)msg,len,HAL_MAX_DELAY);
     }
 
     return result;
@@ -631,8 +590,6 @@ static void send_chronometer_post(void)
 
     if (http_pcb == NULL)
     {
-        int len = snprintf(msg, sizeof(msg), "Could not create TCP connection\r\n");
-        HAL_UART_Transmit(&huart3,(uint8_t *)msg, len, HAL_MAX_DELAY);
         return;
     }
 
@@ -641,9 +598,7 @@ static void send_chronometer_post(void)
 
     if (result != ERR_OK)
     {
-        int len = snprintf(msg, sizeof(msg), "tcp_connect failed: %d\r\n", result);
-
-        HAL_UART_Transmit(&huart3,(uint8_t *)msg,len, HAL_MAX_DELAY);
+        HAL_GPIO_WritePin(EXT_ETH_LED_GPIO_Port, EXT_ETH_LED_Pin, GPIO_PIN_RESET); // Reset the Ethernet LED to indicate an error
         tcp_abort(http_pcb);
         http_pcb = NULL;
     }
